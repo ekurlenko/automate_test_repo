@@ -30,7 +30,7 @@ src/
 └── sheets/           блок 2
     ├── settings.py   схема данных, пути, лимиты Sheets API
     ├── models.py     Report, Synced
-    ├── mart.py       чистка -> дедупликация -> агрегация -> Parquet/CSV
+    ├── mart.py       чистка -> дедупликация -> агрегация -> CSV
     ├── client.py     пакетные чтение и запись, RAW, ретраи на 429
     └── main.py       python -m sheets sample | bench | sync
 ```
