@@ -2,8 +2,11 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
+service_account.json
 .pytest_cache/
 .ruff_cache/
 data/*.csv
 data/*.parquet
-artifacts/
+shots/
+.idea/
+tests/

@@ -7,9 +7,9 @@
 ## Что здесь
 
 **Блок 1** — автоматизация кабинета Ozon через антидетект-браузер AdsPower.
-Профиль запускается по Local API, Playwright подключается к уже живому
-браузеру через CDP, целевое действие выполняется с трёхуровневой обработкой
-отказов (транспорт / страница / антибот).
+Задание просит описать архитектуру (п. 1), план обработки ошибок (п. 2) и
+реализовать кодом п. 3 — запрос к Local API на открытие профиля и получение
+вебдрайвера с портом отладки. Код — ровно про это.
 
 **Блок 2** — оптимизация тяжёлой таблицы. Формулы убираются из листа,
 расчёты уезжают в pandas, в Google Sheets возвращаются только готовые
@@ -26,16 +26,14 @@ cp .env.example .env     # заполнить ключи AdsPower и Google
 ## Запуск
 
 ```bash
-# Блок 1: собрать товары кабинета через профиль AdsPower
-python scripts/run_ozon.py --profile <user_id> --url https://seller.ozon.ru/app/products
-
-# Блок 2: сгенерировать синтетику и снять замеры
-python scripts/generate_sample.py --rows 200000
-python scripts/benchmark.py
-
-# Блок 2: реальный прогон Google Sheets -> витрина -> Google Sheets
-python scripts/sync_sheet.py
+python -m adspower --profile <user_id>    # вебдрайвер и порт отладки
+python -m sheets sample --rows 200000     # сгенерировать сырьё
+python -m sheets bench                    # замеры
+python -m sheets sync                     # Google Sheets -> витрина -> Sheets
 ```
+
+Витрина ложится в `data/mart.parquet` (рабочий формат) и `data/mart.csv`
+(готов к импорту в Google Sheets руками).
 
 ## Тесты
 
@@ -45,20 +43,29 @@ ruff check .
 ```
 
 Тесты не требуют ни сети, ни браузера, ни сервисного аккаунта: Local API
-замокан через `responses`, Sheets API — подставным объектом, Playwright
-Page — двойником.
+замокан через `responses`, Sheets API — подставным объектом.
 
 ## Структура
 
 ```
-src/ozon_test/
-├── adspower/
-│   ├── client.py     Local API: троттлинг, ретраи, разбор code != 0
-│   ├── errors.py     иерархия ошибок по уровням реакции
-│   ├── session.py    профиль -> CDP -> страница -> гарантированный stop
-│   └── scenario.py   целевое действие, детект капчи, зависшая страница
-└── sheets/
-    ├── gsheets.py    пакетные чтение/запись, RAW, ретраи на 429
-    ├── optimize.py   чистка -> дедупликация -> агрегация -> Parquet
-    └── pipeline.py   Sheets -> pandas -> Parquet -> Sheets
+src/
+├── config/           общее
+│   ├── env.py        .env и секреты: единственное место, где читается окружение
+│   └── logs.py       настройка логирования для точек входа
+├── adspower/         блок 1, пункт 3
+│   ├── settings.py   адрес Local API, лимит частоты, таймауты
+│   ├── errors.py     ApiDown / ApiRejected / NoDebugPort
+│   ├── models.py     Endpoint: webdriver, debug_port, cdp, selenium
+│   ├── client.py     запрос к Local API, открытие и закрытие профиля
+│   └── main.py       python -m adspower
+└── sheets/           блок 2
+    ├── settings.py   схема данных, пути, лимиты Sheets API
+    ├── models.py     Report, Synced
+    ├── mart.py       чистка -> дедупликация -> агрегация -> Parquet/CSV
+    ├── client.py     пакетные чтение и запись, RAW, ретраи на 429
+    └── main.py       python -m sheets sample | bench | sync
 ```
+
+Секретов в коде нет: ключи читаются из `.env` (он в `.gitignore`), шаблон —
+`.env.example`. Экспортировать переменные руками не нужно, `config/env.py`
+подхватывает файл сам.

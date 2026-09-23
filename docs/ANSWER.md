@@ -44,8 +44,8 @@
 └──────────────────────────────┬──────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────┐
-│ 4. Целевое действие: открыть список товаров, дождаться           │
-│    ключевого селектора, собрать строки по data-атрибутам         │
+│ 4. Целевое действие: открыть страницу и дождаться готовности     │
+│    по ключевому селектору (дальше — клик или чтение данных)      │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ finally — всегда
 ┌──────────────────────────────▼──────────────────────────────────┐
@@ -67,7 +67,7 @@
 
 **Троттлинг встроен в клиент.** Local API ограничен одним запросом в секунду;
 при превышении приходит `code=-1, Too many request` на случайном вызове.
-Ограничение реализовано внутри `AdsPowerClient`, а не в вызывающем коде: про
+Ограничение реализовано внутри `AdsPower`, а не в вызывающем коде: про
 него легко забыть, а диагностируется оно тяжело.
 
 **HTTP 200 ничего не значит.** Local API отдаёт логические ошибки с кодом 200 и
@@ -92,15 +92,20 @@ AdsPower. Задача скрипта здесь другая:
 Единый `try/except` с ретраем — главная причина, по которой такие скрипты
 получают бан вместо данных.
 
-| Уровень | Что случилось | Реакция | Где в коде |
+| Уровень | Что случилось | Реакция | Статус |
 |---|---|---|---|
-| **Транспорт** | Local API не отвечает, таймаут, обрыв | Ретрай 3× с экспоненциальной паузой; троттлинг ≥1 с | `adspower/client.py` |
-| **Транспорт** | `code != 0` (нет профиля, нет лицензии) | **Без ретрая** — ответ не изменится, нужно человеку | `ApiRejected` |
-| **Профиль** | Запустился, но `ws.puppeteer` пустой | `ProfileStartError` — подключаться некуда, это провал, а не успех | `client.start()` |
-| **Профиль** | Прокси не поднялся, IP не определяется | Стоп. Работать с домашнего IP нельзя | `scripts/run_ozon.py` |
-| **Страница** | Селектор не появился за таймаут | `reload()` + повтор, до 3 попыток с растущей паузой | `scenario.open_page()` |
-| **Страница** | Не помогло | `PageStalled` + скриншот в `artifacts/` | `scenario.open_page()` |
-| **Антибот** | Капча, «Доступ ограничен», `/challenge` | **Не ретраим.** Скриншот → стоп профиля → ротация IP → пауза 3 мин → одна повторная попытка | `CaptchaDetected` |
+| **Транспорт** | Local API не отвечает, таймаут, обрыв | Ретрай 3× с экспоненциальной паузой; троттлинг ≥1 с | реализовано, `AdsPower._get()` |
+| **Транспорт** | `code != 0` (нет профиля, нет лицензии) | **Без ретрая** — ответ не изменится, нужно человеку | реализовано, `ApiRejected` |
+| **Профиль** | Запустился, но `ws.puppeteer` пустой | Подключаться некуда: это провал, а не успех | реализовано, `NoDebugPort` |
+| **Профиль** | Профиль не закрыт после работы | `stop` в `finally`, иначе копятся процессы Chromium | реализовано, `launched()` |
+| **Профиль** | Прокси не поднялся, IP не определяется | Стоп. Работать с домашнего IP нельзя | план |
+| **Страница** | Селектор не появился за таймаут | `reload()` + повтор, до 3 попыток с растущей паузой | план |
+| **Страница** | Не помогло | Скриншот для разбора, остановка с понятной ошибкой | план |
+| **Антибот** | Капча, «Доступ ограничен», `/challenge` | **Не ретраим.** Скриншот → стоп профиля → ротация IP → пауза 3 мин → одна повторная попытка | план |
+
+Задание просит реализовать кодом пункт 3, поэтому здесь и в 1.1 — план работы,
+а в коде разобрана та часть, что относится к самому Local API: троттлинг,
+ретраи транспорта, разбор `code != 0` и гарантированное закрытие профиля.
 
 Отдельные решения, которые стоит проговорить:
 
@@ -128,130 +133,126 @@ AdsPower. Задача скрипта здесь другая:
 как автоматизация. Плюс это просто вежливо по отношению к чужому серверу.
 
 **Данные читаются по `data`-атрибутам, а не по позициям колонок.** Вёрстка
-кабинета меняется часто; `data-testid` переживает редизайн, а `nth-child(3)` —
-нет. Отсутствующая ячейка не роняет сбор строки.
+кабинета меняется часто, и `nth-child(3)` ломается первым. Оговорюсь: на живом
+кабинете `data-testid` на странице товаров не оказалось вовсе, а виджет списка
+называется `@seller-ui/products` — то есть селекторы в таком проекте придётся
+сверять с вёрсткой и держать в конфиге, а не в коде.
 
-## 1.3. Код: запуск профиля и получение точки отладки
+## 1.3. Код: запуск профиля и получение вебдрайвера и порта отладки
 
-Фрагмент, который просили в задании, — целиком из `src/ozon_test/adspower/client.py`
-и `session.py`:
+Это единственный пункт блока 1, который задание просит реализовать, — и
+реализован он целиком: `src/adspower.py`, 224 строки, 10 тестов.
 
 ```python
-import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+class AdsPower:
+    """Клиент Local API. Троттлинг внутри: про лимит легко забыть, а ловится
+    он неинформативным `code=-1` на случайном запросе."""
 
-
-class AdsPowerClient:
-    def _throttle(self) -> None:
-        """Local API: не чаще одного запроса в секунду."""
+    def _wait_turn(self) -> None:
+        """Local API принимает не чаще одного запроса в секунду."""
         with self._lock:
-            elapsed = self._clock() - self._last_request_at
-            if elapsed < self.min_interval:
-                self._sleep(self.min_interval - elapsed)
-            self._last_request_at = self._clock()
+            idle = self._clock() - self._last_call
+            if idle < self.rate_limit:
+                self._sleep(self.rate_limit - idle)
+            self._last_call = self._clock()
 
     @retry(
-        # Ретраим только транспорт. Логические отказы API повторять бессмысленно.
-        retry=retry_if_exception_type(LocalApiUnavailable),
+        # Ретраим только транспорт: логический отказ повторять незачем.
+        retry=retry_if_exception_type(ApiDown),
         wait=wait_exponential(multiplier=1, min=1, max=15),
         stop=stop_after_attempt(3),
         reraise=True,
     )
-    def _request(self, path: str, params: dict | None = None) -> dict:
-        self._throttle()
-        query = dict(params or {})
-        if self.api_key:
-            query["api_key"] = self.api_key
-
+    def _get(self, path, params=None):
+        self._wait_turn()
+        # Начиная с 8.x ключ принимается только заголовком: query-параметр
+        # `api_key` из старой документации отвергается с `Require api-key`.
+        headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
         try:
-            response = self._session.get(f"{self.base_url}{path}", params=query, timeout=self.timeout)
+            response = self._http.get(f"{self.api_url}{path}", params=params or {},
+                                      headers=headers, timeout=self.timeout)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
-            raise LocalApiUnavailable(
-                f"Local API недоступен ({self.base_url}): {exc}. "
-                "Проверьте, что приложение AdsPower запущено и Local API включён."
-            ) from exc
+            raise ApiDown(f"Local API недоступен ({self.api_url}): {exc}. "
+                          "Проверьте, что AdsPower запущен и Local API включён.") from exc
 
-        # Главная ловушка Local API: ошибки приезжают с HTTP 200.
+        # Главная ловушка Local API: отказы приезжают с HTTP 200.
         if payload.get("code") != 0:
-            raise ApiRejected(payload.get("code", -1), payload.get("msg", "неизвестная ошибка"))
+            raise ApiRejected(payload.get("code", -1), payload.get("msg", ""))
         return payload.get("data") or {}
 
-    def start(self, user_id: str, *, headless: bool = False) -> BrowserEndpoint:
-        data = self._request(
-            "/api/v1/browser/start",
-            {"user_id": user_id, "headless": int(headless), "open_tabs": 0, "ip_tab": 0},
-        )
-        ws = (data.get("ws") or {}).get("puppeteer", "")
-        if not ws:
-            raise ProfileStartError(f"профиль {user_id} запущен, но точки отладки нет: {data}")
-        return BrowserEndpoint(
-            user_id=user_id, ws_puppeteer=ws, debug_port=str(data.get("debug_port", "")),
-            selenium=(data.get("ws") or {}).get("selenium", ""), webdriver=data.get("webdriver", ""),
+    def start(self, user_id, *, headless=False) -> Endpoint:
+        """Открыть профиль по ID и получить вебдрайвер с портом отладки."""
+        data = self._get("/api/v1/browser/start",
+                         {"user_id": user_id, "headless": int(headless),
+                          # стартовые вкладки сбивают выбор рабочей страницы
+                          "open_tabs": 0, "ip_tab": 0})
+
+        ws = data.get("ws") or {}
+        if not ws.get("puppeteer"):
+            raise NoDebugPort(f"профиль {user_id} запущен, но точки отладки нет: {data}")
+
+        return Endpoint(
+            user_id=user_id,
+            cdp_url=ws["puppeteer"],                    # Playwright / Puppeteer
+            selenium=ws.get("selenium", ""),            # Selenium
+            debug_port=str(data.get("debug_port", "")),  # порт CDP
+            webdriver=data.get("webdriver", ""),         # путь к chromedriver
         )
 
-    def stop(self, user_id: str) -> None:
-        """Не бросает: вызывается из finally и не должен затирать исходную ошибку."""
+    def stop(self, user_id) -> None:
+        """Закрыть профиль. Не бросает: вызывается из finally."""
         try:
-            self._request("/api/v1/browser/stop", {"user_id": user_id})
+            self._get("/api/v1/browser/stop", {"user_id": user_id})
         except Exception as exc:
-            log.warning("не удалось остановить профиль %s: %s", user_id, exc)
-```
+            log.warning("профиль %s не остановился штатно: %s", user_id, exc)
 
-Подключение Playwright к запущенному браузеру:
 
-```python
 @contextmanager
-def browser_page(client: AdsPowerClient, user_id: str, *, default_timeout_ms: int = 30_000):
-    from playwright.sync_api import sync_playwright
+def launched(ads: AdsPower, user_id: str, **kwargs):
+    """Открыть профиль и гарантированно закрыть его на выходе.
 
-    with profile(client, user_id) as endpoint:          # start + гарантированный stop
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(endpoint.cdp_url)
-            # Контекст профиля уже существует — забираем его, а не создаём новый.
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
-            context.set_default_timeout(default_timeout_ms)
-            page = context.pages[0] if context.pages else context.new_page()
-            try:
-                yield page, context
-            finally:
-                browser.close()   # рвём только соединение; браузер гасит AdsPower
+    Без finally брошенные профили копятся: AdsPower держит каждый как живой
+    процесс Chromium, и через десяток прогонов машина встаёт.
+    """
+    endpoint = ads.start(user_id, **kwargs)
+    try:
+        yield endpoint
+    finally:
+        ads.stop(user_id)
 ```
 
-Открытие страницы с полной обработкой отказов:
+**Запуск и результат на живом стенде** (AdsPower 8.7.23, Ubuntu 24.04):
 
-```python
-def open_page(page, url, ready_selector, *, policy=None, timeout_ms=30_000, artifacts_dir="artifacts"):
-    policy = policy or RetryPolicy()
+```
+$ python -m adspower --profile k1h97vf6
 
-    for attempt in range(1, policy.attempts + 1):
-        try:
-            if attempt == 1:
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            else:
-                page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
-
-            # Проверка антибота ДО ожидания селектора: иначе потратим весь таймаут
-            # на страницу капчи и получим ложный диагноз.
-            guard_antibot(page, artifacts_dir=artifacts_dir)
-            page.wait_for_selector(ready_selector, timeout=timeout_ms)
-            return
-        except CaptchaDetected:
-            raise                                   # наверх без ретраев
-        except Exception as exc:
-            if attempt < policy.attempts:
-                policy.sleep(policy.delay_for(attempt))   # экспонента + джиттер
-
-    capture_artifact(page, "stalled", artifacts_dir)
-    raise PageStalled(f"{url}: селектор {ready_selector!r} не появился")
+INFO adspower: профиль k1h97vf6 запущен, debug_port=42731
+INFO adspower: профиль k1h97vf6 остановлен
+user_id:    k1h97vf6
+webdriver:  ~/.config/adspower_global/cwd_global/chrome_150/chromedriver
+debug_port: 42731
+cdp:        ws://127.0.0.1:42731/devtools/browser/38d24e76-...
+selenium:   127.0.0.1:42731
 ```
 
-**Запуск:**
+`webdriver` — путь к chromedriver нужной версии, если автоматизировать через
+Selenium. `debug_port` и `cdp` — порт Chrome DevTools Protocol, к которому
+подключается Playwright или Puppeteer. AdsPower отдаёт оба варианта сразу.
 
-```bash
-python scripts/run_ozon.py --profile <user_id> --url https://seller.ozon.ru/app/products
-```
+### Что показал прогон на реальном стенде
+
+Проверка на живом AdsPower нашла две вещи, которых на моках не видно.
+
+Первая: ключ API нужно передавать заголовком `Authorization: Bearer`, а не
+query-параметром `api_key`, как сказано в распространённой документации —
+иначе приходит `Require api-key`.
+
+Вторая: AdsPower умеет считать закрытый профиль запущенным. `/browser/active`
+отдаёт `Active`, `start()` возвращает старую точку отладки, а порт уже мёртв.
+Лечится принудительным `stop` и повторным `start` — это стоит учитывать в
+пункте 2 как отдельный сценарий отказа.
 
 ---
 
@@ -326,10 +327,10 @@ Apps Script — рабочий вариант для простых случае
 
 ## 2.2. Код
 
-Функция полного прохода — `src/ozon_test/sheets/optimize.py`:
+Функция полного прохода — `src/sheets.py`:
 
 ```python
-RAW_DTYPES = {
+SCHEMA = {
     "date": "datetime64[ns]",
     "article": "category",     # кратная экономия памяти против object
     "warehouse": "category",
@@ -340,18 +341,18 @@ RAW_DTYPES = {
 
 # Одна продажа = артикул + склад + день. Повтор по этому ключу — правка старой
 # строки, а не вторая продажа.
-KEY_COLUMNS = ("date", "article", "warehouse")
+KEY = ("date", "article", "warehouse")
 
 
-def normalize(df: pd.DataFrame) -> pd.DataFrame:
+def clean(df: pd.DataFrame) -> pd.DataFrame:
     """Привести к схеме и выкинуть строки без ключа."""
-    out = df.loc[:, list(RAW_DTYPES)].copy()
+    out = df.loc[:, list(SCHEMA)].copy()
 
     out["date"] = pd.to_datetime(out["date"], errors="coerce", format="mixed")
     for column in ("article", "warehouse"):
         out[column] = out[column].astype("string").str.strip().replace("", pd.NA)
     for column in ("qty", "price", "revenue"):
-        out[column] = _to_number(out[column]).fillna(0)   # "1 234,50" -> 1234.5
+        out[column] = _numeric(out[column]).fillna(0)   # "1 234,50" -> 1234.5
 
     # Строка без даты или артикула неинтерпретируема: агрегировать её некуда.
     out = out.dropna(subset=["date", "article"]).reset_index(drop=True)
@@ -364,16 +365,16 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def deduplicate(df: pd.DataFrame) -> pd.DataFrame:
+def dedupe(df: pd.DataFrame) -> pd.DataFrame:
     """keep='last' — не вкусовщина: выгрузки дописываются в конец,
     нижняя строка по тому же ключу всегда свежее верхней."""
-    return df.drop_duplicates(subset=list(KEY_COLUMNS), keep="last").reset_index(drop=True)
+    return df.drop_duplicates(subset=list(KEY), keep="last").reset_index(drop=True)
 
 
-def aggregate_by_article(df: pd.DataFrame) -> pd.DataFrame:
+def by_article(df: pd.DataFrame) -> pd.DataFrame:
     """Свернуть продажи по артикулу — это и есть витрина."""
     if df.empty:
-        return pd.DataFrame(columns=list(MART_COLUMNS))
+        return pd.DataFrame(columns=list(MART))
 
     mart = (
         # observed=True обязателен: без него category разворачивается в декартово
@@ -394,11 +395,11 @@ def aggregate_by_article(df: pd.DataFrame) -> pd.DataFrame:
     mart["avg_price"] = (mart["revenue"] / mart["qty"].where(mart["qty"] != 0)).fillna(0)
 
     mart["article"] = mart["article"].astype("string")
-    mart = mart.loc[:, list(MART_COLUMNS)]
+    mart = mart.loc[:, list(MART)]
     return mart.sort_values("revenue", ascending=False).reset_index(drop=True)
 
 
-def save_compact(df: pd.DataFrame, dest) -> Path:
+def to_parquet(df: pd.DataFrame, dest) -> Path:
     """Parquet + zstd: компактно, и схема лежит внутри файла."""
     path = Path(dest)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -406,40 +407,43 @@ def save_compact(df: pd.DataFrame, dest) -> Path:
     return path
 
 
-def optimize_sales(source, dest) -> tuple[pd.DataFrame, OptimizeReport]:
-    """Полный проход: сырой файл -> чистка -> дедупликация -> витрина -> Parquet."""
-    raw = read_raw(source)
-    normalized = normalize(raw)
-    deduped = deduplicate(normalized)
-    mart = aggregate_by_article(deduped)
-    dest_path = save_compact(mart, dest)
-    return mart, OptimizeReport(...)   # что именно сделали — в лог и в отчёт
+def build_mart(source, parquet, csv=None) -> tuple[pd.DataFrame, Report]:
+    """Сырой файл -> чистка -> дедупликация -> витрина -> Parquet (и CSV)."""
+    raw = load(source)
+    cleaned = clean(raw)
+    deduped = dedupe(cleaned)
+    mart = by_article(deduped)
+
+    dest = to_parquet(mart, parquet)
+    if csv:
+        to_csv(mart, csv)          # под ручной импорт в Sheets
+    return mart, Report(...)       # что именно сделали — в лог и в отчёт
 ```
 
-Запись витрины обратно в таблицу — `src/ozon_test/sheets/gsheets.py`:
+Запись витрины обратно в таблицу — `src/sheets.py`:
 
 ```python
-def write_dataframe(self, range_name: str, df: pd.DataFrame, *, clear_first: bool = True) -> int:
+def write(self, cells: str, df: pd.DataFrame, *, clear_first: bool = True) -> int:
     # clear_first обязателен, когда витрина может сократиться: иначе внизу
     # останется хвост прошлой выгрузки.
     if clear_first:
-        self._clear(range_name)
+        self._clear(cells)
     if df.empty:
         return 0
 
-    payload = [list(df.columns)] + _to_cells(df)
-    rows_per_chunk = max(1, MAX_CELLS_PER_REQUEST // max(1, len(df.columns)))
+    payload = [list(df.columns)] + _cells(df)
+    per_chunk = max(1, CELLS_PER_CALL // max(1, len(df.columns)))
 
-    for offset in range(0, len(payload), rows_per_chunk):
-        self._update(f"{sheet}!A{start_row + offset}", payload[offset : offset + rows_per_chunk])
+    for offset in range(0, len(payload), per_chunk):
+        self._update(f"{sheet}!A{start_row + offset}", payload[offset : offset + per_chunk])
     return len(payload) - 1
 
 
 @_with_retry          # ретрай только на 429/5xx, экспоненциальная пауза
-def _update(self, range_name: str, chunk: list[list]) -> None:
+def _update(self, cells: str, chunk: list[list]) -> None:
     self.values.update(
         spreadsheetId=self.spreadsheet_id,
-        range=range_name,
+        range=cells,
         # RAW: пишем значения как есть. USER_ENTERED заставил бы Sheets
         # разбирать каждую ячейку и превращать строки вида "=…" в формулы.
         valueInputOption="RAW",
@@ -467,20 +471,26 @@ def _update(self, range_name: str, chunk: list[list]) -> None:
 время: 0.85 с
 
 === витрина на диске ===
-CSV:     0.3 МБ
-Parquet: 0.1 МБ (в 3.2x компактнее)
+CSV:     0.2 МБ
+Parquet: 0.1 МБ (в 2.6x компактнее)
 ```
 
 Главная цифра — не память, а **218 000 строк → 4 000**. В таблицу уезжает
 витрина в 54 раза меньше сырья, и в ней нет ни одной формулы. Полный пересчёт
 занимает 0,85 секунды против минут ожидания в самой таблице.
 
+Витрина сохраняется в двух видах. Parquet — рабочий формат: типы внутри файла,
+вход для следующего прогона. CSV (`data/mart.csv`) — под ручной импорт в Google
+Sheets, когда сервисного аккаунта нет. `to_csv()` готовит его так, чтобы лист не
+пришлось чинить после импорта: даты `YYYY-MM-DD` без хвоста `00:00:00`, числа с
+точкой и без экспоненты, BOM ради кириллицы в названиях складов.
+
 **Запуск:**
 
 ```bash
-python scripts/generate_sample.py --rows 200000   # сгенерировать сырьё
-python scripts/benchmark.py                        # замеры выше
-python scripts/sync_sheet.py                       # реальный прогон Sheets -> Sheets
+python -m sheets sample --rows 200000   # сгенерировать сырьё
+python -m sheets bench                        # замеры выше
+python -m sheets sync                       # реальный прогон Sheets -> Sheets
 ```
 
 ---
@@ -488,31 +498,29 @@ python scripts/sync_sheet.py                       # реальный прого
 # Что в проекте
 
 ```
-src/ozon_test/
-├── adspower/
-│   ├── client.py     Local API: троттлинг, ретраи, разбор code != 0
-│   ├── errors.py     иерархия ошибок по уровням реакции
-│   ├── session.py    профиль -> CDP -> страница -> гарантированный stop
-│   └── scenario.py   целевое действие, детект капчи, зависшая страница
-└── sheets/
-    ├── gsheets.py    пакетные чтение/запись, RAW, ретраи на 429
-    ├── optimize.py   чистка -> дедупликация -> агрегация -> Parquet
-    └── pipeline.py   Sheets -> pandas -> Parquet -> Sheets
-scripts/              точки входа + генератор синтетики + бенчмарк
-tests/                35 тестов, без сети и без браузера
+src/
+├── config/           общее
+│   ├── env.py        .env и секреты: единственное место, где читается окружение
+│   └── logs.py       настройка логирования для точек входа
+├── adspower/         блок 1, пункт 3
+│   ├── settings.py   адрес Local API, лимит частоты, таймауты
+│   ├── errors.py     ApiDown / ApiRejected / NoDebugPort
+│   ├── models.py     Endpoint: webdriver, debug_port, cdp, selenium
+│   ├── client.py     запрос к Local API, открытие и закрытие профиля
+│   └── main.py       python -m adspower
+└── sheets/           блок 2
+    ├── settings.py   схема данных, пути, лимиты Sheets API
+    ├── models.py     Report, Synced
+    ├── mart.py       чистка -> дедупликация -> агрегация -> Parquet/CSV
+    ├── client.py     пакетные чтение и запись, RAW, ретраи на 429
+    └── main.py       python -m sheets sample | bench | sync
 ```
 
-**Тесты:** `pytest` — 35 штук, проходят за ~10 с. Local API замокан через
-`responses`, Sheets API — подставным объектом, Playwright Page — двойником.
-Ни сеть, ни браузер, ни сервисный аккаунт не нужны.
+Два модуля, по одному на блок. Запуск — через них же:
 
-Дефект, который тест поймал по ходу работы: самый первый запрос к Local API
-честно отстаивал полную секунду троттлинга, хотя перед ним ничего не было.
-
-Ещё два места тесты не столько нашли, сколько закрепили — это решения, в
-которых легко откатиться назад при следующей правке:
-
-* `groupby` по `category` без `observed=True` развернул бы витрину в декартово
-  произведение категорий;
-* средняя цена реализации — это выручка, делённая на штуки; среднее по колонке
-  `price` не взвешено по количеству и даёт неверный ответ.
+```bash
+python -m adspower --profile <user_id>      # вебдрайвер и порт отладки
+python -m sheets sample --rows 200000       # сгенерировать сырьё
+python -m sheets bench                      # замеры
+python -m sheets sync                       # Google Sheets -> витрина -> Sheets
+```
