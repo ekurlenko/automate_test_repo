@@ -3,8 +3,10 @@ from __future__ import annotations
 from config import DATA_DIR, env
 
 # Явные типы — половина экономии памяти: category вместо object.
+# Выручка исключение: она float64, потому что в float32 копейки теряются уже на
+# десятках тысяч рублей, а лишний мегабайт на двухстах тысячах строк не жалко.
 SCHEMA = {"date": "datetime64[ns]", "article": "category", "warehouse": "category",
-          "qty": "int32", "price": "float32", "revenue": "float32"}
+          "qty": "int32", "price": "float32", "revenue": "float64"}
 # Одна продажа = артикул + склад + день; повтор по ключу — правка.
 KEY = ("date", "article", "warehouse")
 MONEY = ("qty", "price", "revenue")

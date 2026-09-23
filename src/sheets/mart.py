@@ -34,7 +34,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
         out[column] = _numeric(out[column]).fillna(0)
 
     out = out.dropna(subset=["date", "article"]).reset_index(drop=True)
-    out = out.astype({"qty": "int32", "price": "float32", "revenue": "float32"})
+    out = out.astype({"qty": "int32", "price": "float32", "revenue": "float64"})
     for column in ("article", "warehouse"):
         out[column] = out[column].fillna("—").astype("category")
     return out
@@ -58,6 +58,8 @@ def by_article(df: pd.DataFrame) -> pd.DataFrame:
             .reset_index())
     # Выручка / штуки: среднее по price не взвешено по количеству.
     mart["avg_price"] = (mart["revenue"] / mart["qty"].where(mart["qty"] != 0)).fillna(0)
+    # Округляем в самой витрине, чтобы CSV и лист показывали одно и то же.
+    mart[["revenue", "avg_price"]] = mart[["revenue", "avg_price"]].round(2)
     mart["article"] = mart["article"].astype("string")
     return mart.loc[:, list(MART)].sort_values("revenue", ascending=False).reset_index(drop=True)
 

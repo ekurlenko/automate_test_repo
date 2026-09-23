@@ -28,6 +28,13 @@ class Values(Protocol):
     def clear(self, **kwargs: Any) -> Any: ...
 
 
+class Api(Protocol):
+    """`service.spreadsheets()`: нужен для сетки листа и форматов ячеек."""
+
+    def get(self, **kwargs: Any) -> Any: ...
+    def batchUpdate(self, **kwargs: Any) -> Any: ...  # noqa: N802 — имя из googleapiclient
+
+
 def _retryable(error: BaseException) -> bool:
     return getattr(getattr(error, "resp", None), "status", None) in RETRY_STATUS
 
@@ -46,6 +53,7 @@ class Sheet:
 
     spreadsheet_id: str
     values: Values
+    api: Api | None = None   # без него недоступны расширение сетки и форматы
 
     @classmethod
     def open(cls, key_file: str, spreadsheet_id: str) -> Sheet:
@@ -58,7 +66,8 @@ class Sheet:
             key_file, scopes=list(SHEETS_SCOPES)
         )
         service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
-        return cls(spreadsheet_id, service.spreadsheets().values())
+        api = service.spreadsheets()
+        return cls(spreadsheet_id, api.values(), api)
 
     @_with_retry
     def read(self, cells: str) -> list[list[str]]:
@@ -89,6 +98,56 @@ class Sheet:
         # RAW: USER_ENTERED превратил бы строки вида "=..." в формулы.
         self.values.update(spreadsheetId=self.spreadsheet_id, range=cells,
                            valueInputOption="RAW", body={"values": chunk}).execute()
+
+    @_with_retry
+    def _grid(self, title: str) -> dict[str, Any]:
+        """Свойства листа: id и размер сетки."""
+        meta = self.api.get(spreadsheetId=self.spreadsheet_id).execute()
+        for sheet in meta.get("sheets", []):
+            if sheet["properties"]["title"] == title:
+                return sheet["properties"]
+        raise ValueError(f"в таблице нет листа {title!r}")
+
+    @_with_retry
+    def _batch(self, requests: list[dict[str, Any]]) -> None:
+        self.api.batchUpdate(spreadsheetId=self.spreadsheet_id,
+                             body={"requests": requests}).execute()
+
+    def ensure_grid(self, cells: str, rows: int, columns: int) -> None:
+        """Расширить лист под будущую запись.
+
+        В новом листе 1000 строк, и запись за пределы сетки API отклоняет.
+        """
+        if self.api is None:
+            return
+        title = cells.partition("!")[0] or cells
+        props = self._grid(title)
+        grid = props["gridProperties"]
+        if grid["rowCount"] >= rows and grid["columnCount"] >= columns:
+            return
+        self._batch([{"updateSheetProperties": {
+            "properties": {"sheetId": props["sheetId"],
+                           "gridProperties": {"rowCount": max(rows, grid["rowCount"]),
+                                              "columnCount": max(columns, grid["columnCount"])}},
+            "fields": "gridProperties"}}])
+        log.info("сетка листа %s расширена до %s строк", title, rows)
+
+    def format_dates(self, cells: str, columns: list[int]) -> None:
+        """Пометить колонки как даты.
+
+        RAW пишет строки как строки, поэтому без формата лист считает дату
+        текстом и не даёт ни отсортировать по ней, ни отфильтровать.
+        """
+        if self.api is None or not columns:
+            return
+        title = cells.partition("!")[0] or cells
+        sheet_id = self._grid(title)["sheetId"]
+        self._batch([{"repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 1,
+                      "startColumnIndex": column, "endColumnIndex": column + 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE",
+                                                            "pattern": "yyyy-mm-dd"}}},
+            "fields": "userEnteredFormat.numberFormat"}} for column in columns])
 
     def write(self, cells: str, df: pd.DataFrame, *, clear_first: bool = True) -> int:
         """Выложить витрину пакетами; чистка нужна, иначе внизу останется хвост."""
@@ -136,7 +195,10 @@ def sync(
     mart = by_article(deduped)
 
     csv_path = to_csv(mart, csv)
+    sheet.ensure_grid(mart_cells, len(mart) + 1, len(mart.columns))
     rows_written = sheet.write(mart_cells, mart)
+    sheet.format_dates(mart_cells, [i for i, name in enumerate(mart.columns)
+                                    if name in ("first_sale", "last_sale")])
     log.info("записано строк в %s: %s", mart_cells, rows_written)
 
     return Synced(mart, Report(
