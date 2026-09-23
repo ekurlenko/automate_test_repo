@@ -75,13 +75,15 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Витрина продаж: pandas вместо формул")
     parser.add_argument("--raw", type=Path, default=RAW_FILE)
-    parser.add_argument("--csv", type=Path, default=CSV_FILE)
     commands = parser.add_subparsers(dest="command", required=True)
     generate = commands.add_parser("sample", help="сгенерировать сырьё")
     generate.add_argument("--rows", type=int, default=200_000)
     generate.add_argument("--articles", type=int, default=4_000)
-    commands.add_parser("bench", help="замеры: наивно против витрины")
-    commands.add_parser("sync", help="Google Sheets -> витрина -> Google Sheets")
+    bench = commands.add_parser("bench", help="замеры: наивно против витрины")
+    bench.add_argument("--csv", type=Path, default=CSV_FILE, help="куда сложить витрину")
+    sync_cmd = commands.add_parser("sync", help="Google Sheets -> витрина -> Google Sheets")
+    sync_cmd.add_argument("--csv", type=Path, default=None,
+                          help="дополнительно сохранить витрину файлом")
     args = parser.parse_args(argv)
 
     match args.command:
@@ -103,5 +105,6 @@ def main(argv: list[str] | None = None) -> int:
                 csv=args.csv,
             )
             print(result.report.text())
-            print(f"CSV для импорта: {result.csv}")
+            if result.csv:
+                print(f"снимок витрины: {result.csv}")
     return 0

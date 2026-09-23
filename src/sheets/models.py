@@ -42,4 +42,4 @@ class Synced:
     mart: pd.DataFrame
     report: Report
     rows_written: int
-    csv: Path
+    csv: Path | None

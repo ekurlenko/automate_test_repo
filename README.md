@@ -12,6 +12,7 @@ python -m adspower --profile <user_id>    # вебдрайвер и порт о�
 python -m sheets sample --rows 200000     # сгенерировать сырые данные
 python -m sheets bench                    # замеры
 python -m sheets sync                     # Google Sheets -> витрина -> Sheets
+python -m sheets sync --csv data/mart.csv # то же плюс снимок витрины файлом
 ```
 
 ## Структура

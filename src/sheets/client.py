@@ -12,7 +12,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from sheets.mart import by_article, clean, dedupe, to_csv
 from sheets.models import Report, Synced
-from sheets.settings import CELLS_PER_CALL, CSV_FILE, RETRY_STATUS, SHEETS_SCOPES
+from sheets.settings import CELLS_PER_CALL, RETRY_STATUS, SHEETS_SCOPES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -183,9 +183,13 @@ def sync(
     *,
     raw_cells: str,
     mart_cells: str,
-    csv: str | Path = CSV_FILE,
+    csv: str | Path | None = None,
 ) -> Synced:
-    """Пересобрать витрину: один get, расчёт в pandas, один update."""
+    """Пересобрать витрину: один get, расчёт в pandas, один update.
+
+    csv — необязательный снимок на диск: лист перезаписывается каждым прогоном,
+    а файл остаётся, и по нему можно сверить расхождения.
+    """
     started = time.perf_counter()
     raw = sheet.frame(raw_cells)
     log.info("прочитано строк из %s: %s", raw_cells, len(raw))
@@ -194,7 +198,7 @@ def sync(
     deduped = dedupe(cleaned)
     mart = by_article(deduped)
 
-    csv_path = to_csv(mart, csv)
+    csv_path = to_csv(mart, csv) if csv else None
     sheet.ensure_grid(mart_cells, len(mart) + 1, len(mart.columns))
     rows_written = sheet.write(mart_cells, mart)
     sheet.format_dates(mart_cells, [i for i, name in enumerate(mart.columns)
@@ -207,6 +211,7 @@ def sync(
         rows_deduped=len(cleaned) - len(deduped),
         rows_out=len(mart),
         bytes_in=len(raw) * max(1, len(raw.columns)) * 10,  # ~10 байт на ячейку
-        bytes_out=csv_path.stat().st_size,
+        bytes_out=(csv_path.stat().st_size if csv_path
+                   else len(mart) * max(1, len(mart.columns)) * 10),
         seconds=time.perf_counter() - started,
     ), rows_written, csv_path)
