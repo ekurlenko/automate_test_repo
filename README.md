@@ -25,7 +25,7 @@ src/
 │   ├── settings.py   адрес Local API, лимит частоты, таймауты
 │   ├── errors.py     ApiDown / ApiRejected / NoDebugPort
 │   ├── models.py     Endpoint: webdriver, debug_port, cdp, selenium
-│   ├── client.py     запрос к Local API, открытие и закрытие профиля
+│   ├── client.py     Local API: профиль, точка отладки, прокси, ротация IP
 │   └── main.py       python -m adspower
 └── sheets/           блок 2
     ├── settings.py   схема данных, пути, лимиты Sheets API
