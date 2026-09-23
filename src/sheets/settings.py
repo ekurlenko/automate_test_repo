@@ -12,7 +12,6 @@ MART = ("article", "qty", "revenue", "avg_price", "days_with_sales",
         "first_sale", "last_sale")
 
 RAW_FILE = DATA_DIR / "raw_sales.csv"
-PARQUET_FILE = DATA_DIR / "mart.parquet"
 CSV_FILE = DATA_DIR / "mart.csv"
 
 WAREHOUSES = ("Хоругвино", "Тверь", "Софьино", "Казань", "Екатеринбург")

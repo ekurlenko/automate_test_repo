@@ -14,7 +14,6 @@ packages = [
 python = "^3.12"
 requests = "^2.32"
 pandas = "^2.2"
-pyarrow = "^17.0"
 google-api-python-client = "^2.147"
 google-auth = "^2.35"
 tenacity = "^9.0"

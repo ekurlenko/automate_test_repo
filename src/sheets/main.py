@@ -15,7 +15,6 @@ from sheets.mart import build_mart, clean, dedupe, load
 from sheets.settings import (
     CSV_FILE,
     MART_RANGE,
-    PARQUET_FILE,
     RAW_FILE,
     RAW_RANGE,
     WAREHOUSES,
@@ -51,7 +50,7 @@ def _mb(value: float) -> str:
     return f"{value / 1024 / 1024:.1f} МБ"
 
 
-def _bench(source: Path, parquet: Path, csv: Path) -> None:
+def _bench(source: Path, csv: Path) -> None:
     started = time.perf_counter()
     naive_memory = int(pd.read_csv(source).memory_usage(deep=True).sum())
     naive_time = time.perf_counter() - started
@@ -60,7 +59,7 @@ def _bench(source: Path, parquet: Path, csv: Path) -> None:
     fast_memory = int(dedupe(clean(load(source))).memory_usage(deep=True).sum())
     fast_time = time.perf_counter() - started
 
-    _mart, report = build_mart(source, parquet, csv)
+    _mart, report = build_mart(source, csv)
 
     print("=== память на сыром кадре ===")
     print(f"наивно (object):      {_mb(naive_memory)}  за {naive_time:.2f} с")
@@ -69,16 +68,13 @@ def _bench(source: Path, parquet: Path, csv: Path) -> None:
     print("=== полный пайплайн ===")
     print(report.text(), "\n")
     print("=== витрина на диске ===")
-    print(f"CSV:     {_mb(csv.stat().st_size)}")
-    print(f"Parquet: {_mb(parquet.stat().st_size)} "
-          f"(в {csv.stat().st_size / parquet.stat().st_size:.1f}x компактнее)")
+    print(f"{csv}: {_mb(csv.stat().st_size)}")
 
 
 def main(argv: list[str] | None = None) -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Витрина продаж: pandas вместо формул")
     parser.add_argument("--raw", type=Path, default=RAW_FILE)
-    parser.add_argument("--parquet", type=Path, default=PARQUET_FILE)
     parser.add_argument("--csv", type=Path, default=CSV_FILE)
     commands = parser.add_subparsers(dest="command", required=True)
     generate = commands.add_parser("sample", help="сгенерировать сырьё")
@@ -94,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             sample(args.rows, args.articles).to_csv(args.raw, index=False)
             print(f"{args.raw}: {args.raw.stat().st_size / 1024 / 1024:.1f} МБ")
         case "bench":
-            _bench(args.raw, args.parquet, args.csv)
+            _bench(args.raw, args.csv)
         case "sync":
             spreadsheet_id, key_file = SPREADSHEET_ID, GOOGLE_SERVICE_ACCOUNT_FILE
             if not spreadsheet_id or not key_file:
@@ -104,9 +100,8 @@ def main(argv: list[str] | None = None) -> int:
                 Sheet.open(key_file, spreadsheet_id),
                 raw_cells=RAW_RANGE,
                 mart_cells=MART_RANGE,
-                parquet=args.parquet,
                 csv=args.csv,
             )
             print(result.report.text())
-            print(f"снимок: {result.parquet}\nCSV для импорта: {result.csv}")
+            print(f"CSV для импорта: {result.csv}")
     return 0

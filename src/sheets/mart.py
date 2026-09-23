@@ -68,20 +68,10 @@ def load(source: str | Path) -> pd.DataFrame:
     match path.suffix.lower():
         case ".csv":
             return pd.read_csv(path, dtype="string", keep_default_na=False)
-        case ".parquet":
-            return pd.read_parquet(path)
         case ".xlsx" | ".xlsm":
             return pd.read_excel(path, dtype="string")
         case _:
             raise ValueError(f"неподдерживаемый формат: {path.suffix!r}")
-
-
-def to_parquet(df: pd.DataFrame, dest: str | Path) -> Path:
-    """Рабочий формат: сжатие и типы внутри файла."""
-    path = Path(dest)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path, engine="pyarrow", compression="zstd", index=False)
-    return path
 
 
 def to_csv(df: pd.DataFrame, dest: str | Path) -> Path:
@@ -96,19 +86,15 @@ def to_csv(df: pd.DataFrame, dest: str | Path) -> Path:
     return path
 
 
-def build_mart(
-    source: str | Path, parquet: str | Path, csv: str | Path | None = None
-) -> tuple[pd.DataFrame, Report]:
-    """Сырой файл -> чистка -> дедупликация -> витрина -> Parquet (и CSV)."""
+def build_mart(source: str | Path, csv: str | Path) -> tuple[pd.DataFrame, Report]:
+    """Сырой файл -> чистка -> дедупликация -> витрина -> CSV."""
     started = time.perf_counter()
     raw = load(source)
     cleaned = clean(raw)
     deduped = dedupe(cleaned)
     mart = by_article(deduped)
 
-    dest = to_parquet(mart, parquet)
-    if csv:
-        to_csv(mart, csv)
+    dest = to_csv(mart, csv)
     return mart, Report(
         rows_in=len(raw),
         rows_dropped=len(raw) - len(cleaned),

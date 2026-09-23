@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 import pandas as pd
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from sheets.mart import by_article, clean, dedupe, to_csv, to_parquet
+from sheets.mart import by_article, clean, dedupe, to_csv
 from sheets.models import Report, Synced
-from sheets.settings import CELLS_PER_CALL, PARQUET_FILE, RETRY_STATUS, SHEETS_SCOPES
+from sheets.settings import CELLS_PER_CALL, CSV_FILE, RETRY_STATUS, SHEETS_SCOPES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -124,8 +124,7 @@ def sync(
     *,
     raw_cells: str,
     mart_cells: str,
-    parquet: str | Path = PARQUET_FILE,
-    csv: str | Path | None = None,
+    csv: str | Path = CSV_FILE,
 ) -> Synced:
     """Пересобрать витрину: один get, расчёт в pandas, один update."""
     started = time.perf_counter()
@@ -136,8 +135,7 @@ def sync(
     deduped = dedupe(cleaned)
     mart = by_article(deduped)
 
-    snapshot = to_parquet(mart, parquet)
-    csv_path = to_csv(mart, csv) if csv else None
+    csv_path = to_csv(mart, csv)
     rows_written = sheet.write(mart_cells, mart)
     log.info("записано строк в %s: %s", mart_cells, rows_written)
 
@@ -147,6 +145,6 @@ def sync(
         rows_deduped=len(cleaned) - len(deduped),
         rows_out=len(mart),
         bytes_in=len(raw) * max(1, len(raw.columns)) * 10,  # ~10 байт на ячейку
-        bytes_out=snapshot.stat().st_size,
+        bytes_out=csv_path.stat().st_size,
         seconds=time.perf_counter() - started,
-    ), rows_written, snapshot, csv_path)
+    ), rows_written, csv_path)
