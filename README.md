@@ -14,9 +14,6 @@ python -m sheets bench                    # замеры
 python -m sheets sync                     # Google Sheets -> витрина -> Sheets
 ```
 
-Витрина ложится в `data/mart.parquet` (рабочий формат) и `data/mart.csv`
-(готов к импорту в Google Sheets руками).
-
 ## Структура
 
 ```
